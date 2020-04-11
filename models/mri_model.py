@@ -51,13 +51,13 @@ class MRIModel(pl.LightningModule):
             sample_rate=sample_rate,
             challenge=self.hparams.challenge
         )
-        sampler = DistributedSampler(dataset)
+        #sampler = DistributedSampler(dataset)
         return DataLoader(
             dataset=dataset,
             batch_size=self.hparams.batch_size,
-            num_workers=8,
+            num_workers=4,
             pin_memory=True,
-            sampler=sampler,
+        #    sampler=sampler,
         )
 
     def train_data_transform(self):
@@ -127,11 +127,11 @@ class MRIModel(pl.LightningModule):
         _save_image(outputs, 'Reconstruction')
         _save_image(np.abs(targets - outputs), 'Error')
 
-    def validation_end(self, val_logs):
+    def validation_epoch_end(self, val_logs):
         self._visualize(val_logs)
         return self._evaluate(val_logs)
 
-    def test_endi_end(self, test_logs):
+    def test_epoch_end(self, test_logs):
         outputs = defaultdict(list)
         for log in test_logs:
             for i, (fname, slice) in enumerate(zip(log['fname'], log['slice'])):

@@ -11,9 +11,9 @@ import random
 import numpy as np
 import torch
 from pytorch_lightning import Trainer
-from pytorch_lightning.logging import TestTubeLogger
+from pytorch_lightning.loggers.test_tube import TestTubeLogger
 from torch.nn import functional as F
-from torch.optim import RMSprop
+from torch.optim.rmsprop import RMSprop
 
 from common.args import Args
 from common.subsample import create_mask_for_mask_type
