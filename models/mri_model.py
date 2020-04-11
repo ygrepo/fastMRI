@@ -113,6 +113,7 @@ class MRIModel(pl.LightningModule):
 
         # Only process first size to simplify visualization.
         visualize_size = val_logs[0]['output'].shape
+        print(f"visualize_size:{visualize_size}")
         val_logs = [x for x in val_logs if x['output'].shape == visualize_size]
         num_logs = len(val_logs)
         num_viz_images = 16
