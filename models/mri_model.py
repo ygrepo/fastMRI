@@ -51,13 +51,13 @@ class MRIModel(pl.LightningModule):
             sample_rate=sample_rate,
             challenge=self.hparams.challenge
         )
-        sampler = DistributedSampler(dataset)
+        #sampler = DistributedSampler(dataset)
         return DataLoader(
             dataset=dataset,
             batch_size=self.hparams.batch_size,
             num_workers=4,
             pin_memory=True,
-            sampler=sampler,
+           # sampler=sampler,
         )
 
     def train_data_transform(self):
@@ -109,11 +109,13 @@ class MRIModel(pl.LightningModule):
 
         def _save_image(image, tag):
             grid = torchvision.utils.make_grid(torch.Tensor(image), nrow=4, pad_value=1)
+            #try:
             self.logger.experiment.add_image(tag, grid)
+            #except:
+            #    print("Exception")
 
         # Only process first size to simplify visualization.
         visualize_size = val_logs[0]['output'].shape
-        print(f"visualize_size:{visualize_size}")
         val_logs = [x for x in val_logs if x['output'].shape == visualize_size]
         num_logs = len(val_logs)
         num_viz_images = 16
