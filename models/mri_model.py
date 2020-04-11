@@ -131,7 +131,7 @@ class MRIModel(pl.LightningModule):
         self._visualize(val_logs)
         return self._evaluate(val_logs)
 
-    def test_end(self, test_logs):
+    def test_endi_end(self, test_logs):
         outputs = defaultdict(list)
         for log in test_logs:
             for i, (fname, slice) in enumerate(zip(log['fname'], log['slice'])):
