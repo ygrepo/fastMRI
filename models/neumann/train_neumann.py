@@ -19,6 +19,8 @@ from common.args import Args
 from common.subsample import create_mask_for_mask_type
 from data import transforms
 from models.mri_model import MRIModel
+from models.neumann.neumann_model import NeumannNetwork
+from models.neumann.operators import ForwardOperator, GramianModel
 from models.unet.unet_model import UnetModel
 
 
@@ -64,6 +66,7 @@ class DataTransform:
         kspace = transforms.to_tensor(kspace)
         # Apply mask
         if self.mask_func:
+            print("Applying mask")
             seed = None if not self.use_seed else tuple(map(ord, fname))
             masked_kspace, mask = transforms.apply_mask(kspace, self.mask_func, seed)
         else:
@@ -95,37 +98,51 @@ class DataTransform:
             target = target.clamp(-6, 6)
         else:
             target = torch.Tensor([0])
+        return kspace, image, target, mean, std, fname, slice
 
-        return image, target, mean, std, fname, slice
 
-
-class UnetMRIModel(MRIModel):
+class NeumannMRIModel(MRIModel):
     def __init__(self, hparams):
         super().__init__(hparams)
-        self.unet = UnetModel(
+        # reg_model = REDNet20(num_features= self.hparams.resolution)
+        reg_model = UnetModel(
             in_chans=1,
             out_chans=1,
             chans=hparams.num_chans,
             num_pool_layers=hparams.num_pools,
             drop_prob=hparams.drop_prob
         )
+        self.neumann = NeumannNetwork(reg_network=reg_model, hparams=hparams)
+
+    def resize(self, image, target):
+        smallest_width = min(self.hparams.resolution, image.shape[-2])
+        smallest_height = min(self.resolution, image.shape[-3])
+        if target is not None:
+            smallest_width = min(smallest_width, target.shape[-1])
+            smallest_height = min(smallest_height, target.shape[-2])
+        crop_size = (smallest_height, smallest_width)
+        image = transforms.complex_center_crop(image, crop_size)
+        # Absolute value
+        image = transforms.complex_abs(image)
+        # Apply Root-Sum-of-Squares if multicoil data
+        if self.hparams.challenge == 'multicoil':
+            image = transforms.root_sum_of_squares(image)
+        return image
 
     def forward(self, input):
-        return self.unet(input.unsqueeze(1)).squeeze(1)
+        return self.neumann(input.unsqueeze(1)).squeeze(1)
 
     def training_step(self, batch, batch_idx):
-        input, target, mean, std, _, _ = batch
-        output = self.forward(input)
-        loss = F.l1_loss(output, target)
+        kspace, _, target, mean, std, _, _ = batch
+        output = self.forward(kspace)
+        output = self.resize(output, target)
+        loss = F.mse_loss(output, target)
         logs = {'loss': loss.item()}
         return dict(loss=loss, log=logs)
 
     def validation_step(self, batch, batch_idx):
-        input, target, mean, std, fname, slice = batch
-        print(f"input: {input.dtype}, {input.shape}")
-        output = self.forward(input)
-        print(f"output: {output.dtype}, {output.shape}")
-        print(f"{mean.shape}, {std.shape}")
+        kspace, input, target, mean, std, fname, slice = batch
+        output = self.forward(kspace)
         mean = mean.unsqueeze(1).unsqueeze(2)
         std = std.unsqueeze(1).unsqueeze(2)
         return {
@@ -133,7 +150,7 @@ class UnetMRIModel(MRIModel):
             'slice': slice,
             'output': (output * std + mean).cpu().numpy(),
             'target': (target * std + mean).cpu().numpy(),
-            'val_loss': F.l1_loss(output, target),
+            'val_loss': F.mse_loss(output, target),
         }
 
     def test_step(self, batch, batch_idx):
@@ -149,18 +166,21 @@ class UnetMRIModel(MRIModel):
 
     def configure_optimizers(self):
         optim = RMSprop(self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.weight_decay)
+        # optimizer = torch.optim.Adam(model.parameters(), lr=config["learning_rate"])
         scheduler = torch.optim.lr_scheduler.StepLR(optim, self.hparams.lr_step_size, self.hparams.lr_gamma)
         return [optim], [scheduler]
 
     def train_data_transform(self):
-        mask = create_mask_for_mask_type(self.hparams.mask_type, self.hparams.center_fractions,
-                                         self.hparams.accelerations)
-        return DataTransform(self.hparams.resolution, self.hparams.challenge, mask, use_seed=False)
+        # mask = create_mask_for_mask_type(self.hparams.mask_type, self.hparams.center_fractions,
+        #                                  self.hparams.accelerations)
+        # return DataTransform(self.hparams.resolution, self.hparams.challenge, mask, use_seed=False)
+        return DataTransform(self.hparams.resolution, self.hparams.challenge)
 
     def val_data_transform(self):
-        mask = create_mask_for_mask_type(self.hparams.mask_type, self.hparams.center_fractions,
-                                         self.hparams.accelerations)
-        return DataTransform(self.hparams.resolution, self.hparams.challenge, mask)
+        # mask = create_mask_for_mask_type(self.hparams.mask_type, self.hparams.center_fractions,
+        #                                 self.hparams.accelerations)
+        # return DataTransform(self.hparams.resolution, self.hparams.challenge, mask_func=None)
+        return DataTransform(self.hparams.resolution, self.hparams.challenge)
 
     def test_data_transform(self):
         return DataTransform(self.hparams.resolution, self.hparams.challenge)
@@ -170,6 +190,7 @@ class UnetMRIModel(MRIModel):
         parser.add_argument('--num-pools', type=int, default=4, help='Number of U-Net pooling layers')
         parser.add_argument('--drop-prob', type=float, default=0.0, help='Dropout probability')
         parser.add_argument('--num-chans', type=int, default=32, help='Number of U-Net channels')
+        parser.add_argument('--n_blocks', type=int, default=6, help='Number of Neumann Network blocks')
         parser.add_argument('--batch-size', default=16, type=int, help='Mini batch size')
         parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
         parser.add_argument('--lr-step-size', type=int, default=40,
@@ -200,11 +221,11 @@ def main(args):
         load_version = 0 if args.resume else None
         logger = TestTubeLogger(save_dir=args.exp_dir, name=args.exp, version=load_version)
         trainer = create_trainer(args, logger)
-        model = UnetMRIModel(args)
+        model = NeumannMRIModel(args)
         trainer.fit(model)
     else:  # args.mode == 'test'
         assert args.checkpoint is not None
-        model = UnetMRIModel.load_from_checkpoint(str(args.checkpoint))
+        model = NeumannMRIModel.load_from_checkpoint(str(args.checkpoint))
         model.hparams.sample_rate = 1.
         trainer = create_trainer(args, logger=False)
         trainer.test(model)
@@ -222,7 +243,7 @@ if __name__ == '__main__':
                         help='Path to pre-trained model. Use with --mode test')
     parser.add_argument('--resume', action='store_true',
                         help='If set, resume the training from a previous model checkpoint. ')
-    parser = UnetMRIModel.add_model_specific_args(parser)
+    parser = NeumannMRIModel.add_model_specific_args(parser)
     args = parser.parse_args()
     random.seed(args.seed)
     np.random.seed(args.seed)

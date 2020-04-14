@@ -17,6 +17,9 @@ from common import evaluate
 from common.utils import save_reconstructions
 from data.mri_data import SliceData
 
+import sys
+import imageio
+from pathlib import Path
 
 class MRIModel(pl.LightningModule):
     """
@@ -109,10 +112,10 @@ class MRIModel(pl.LightningModule):
 
         def _save_image(image, tag):
             grid = torchvision.utils.make_grid(torch.Tensor(image), nrow=4, pad_value=1)
-            #try:
-            self.logger.experiment.add_image(tag, grid)
-            #except:
-            #    print("Exception")
+            # try:
+            #     #imageio.imwrite(Path("data/save_val/" + tag), grid)
+            # except:
+            #     print("Unexpected error:", sys.exc_info()[0])
 
         # Only process first size to simplify visualization.
         visualize_size = val_logs[0]['output'].shape
