@@ -102,29 +102,6 @@ class DataTransform:
         image = transforms.ifft2(masked_kspace)
         # Crop input image to given resolution if larger
         image, target, mean, std = resize(image, target, self.resolution, self.which_challenge)
-        # smallest_width = min(self.resolution, image.shape[-2])
-        # smallest_height = min(self.resolution, image.shape[-3])
-        # if target is not None:
-        #     smallest_width = min(smallest_width, target.shape[-1])
-        #     smallest_height = min(smallest_height, target.shape[-2])
-        # crop_size = (smallest_height, smallest_width)
-        # image = transforms.complex_center_crop(image, crop_size)
-        # # Absolute value
-        # image = transforms.complex_abs(image)
-        # # Apply Root-Sum-of-Squares if multicoil data
-        # if self.which_challenge == 'multicoil':
-        #     image = transforms.root_sum_of_squares(image)
-        # # Normalize input
-        # image, mean, std = transforms.normalize_instance(image, eps=1e-11)
-        # image = image.clamp(-6, 6)
-        # # Normalize target
-        # if target is not None:
-        #     target = transforms.to_tensor(target)
-        #     target = transforms.center_crop(target, crop_size)
-        #     target = transforms.normalize(target, mean, std, eps=1e-11)
-        #     target = target.clamp(-6, 6)
-        # else:
-        #     target = torch.Tensor([0])
         return kspace, image, target, fname, slice, mean, std
 
 
@@ -142,16 +119,21 @@ class NeumannMRIModel(MRIModel):
         self.neumann = NeumannNetwork(reg_network=reg_model, hparams=hparams)
 
     def forward(self, input):
-        return self.neumann(input.unsqueeze(1)).squeeze(1)
+        output = self.neumann(input.unsqueeze(1)).squeeze(1)
+        print(f"output:{output.shape}")
+        return output
 
     def training_step(self, batch, batch_idx):
-        kspace, _, target, _, _, _, _ = batch
+        print(f"Training step, batch_idx:{batch_idx}")
+        kspace, input, target, fname, slice, mean, std = batch
         output = self.forward(kspace)
         loss = F.mse_loss(output, target)
         logs = {'loss': loss.item()}
+        print(f"loss:{loss}")
         return dict(loss=loss, log=logs)
 
     def validation_step(self, batch, batch_idx):
+        print(f"Validation step, batch_idx:{batch_idx}")
         kspace, input, target, fname, slice, mean, std = batch
         output = self.forward(kspace)
         mean = mean.unsqueeze(1).unsqueeze(2)
@@ -165,8 +147,8 @@ class NeumannMRIModel(MRIModel):
         }
 
     def test_step(self, batch, batch_idx):
-        input, _, mean, std, fname, slice = batch
-        output = self.forward(input)
+        kspace, input, target, fname, slice, mean, std = batch
+        output = self.forward(kspace)
         mean = mean.unsqueeze(1).unsqueeze(2)
         std = std.unsqueeze(1).unsqueeze(2)
         return {
@@ -182,15 +164,9 @@ class NeumannMRIModel(MRIModel):
         return [optim], [scheduler]
 
     def train_data_transform(self):
-        # mask = create_mask_for_mask_type(self.hparams.mask_type, self.hparams.center_fractions,
-        #                                  self.hparams.accelerations)
-        # return DataTransform(self.hparams.resolution, self.hparams.challenge, mask, use_seed=False)
         return DataTransform(self.hparams.resolution, self.hparams.challenge)
 
     def val_data_transform(self):
-        # mask = create_mask_for_mask_type(self.hparams.mask_type, self.hparams.center_fractions,
-        #                                 self.hparams.accelerations)
-        # return DataTransform(self.hparams.resolution, self.hparams.challenge, mask_func=None)
         return DataTransform(self.hparams.resolution, self.hparams.challenge)
 
     def test_data_transform(self):
@@ -201,8 +177,8 @@ class NeumannMRIModel(MRIModel):
         parser.add_argument('--num-pools', type=int, default=4, help='Number of U-Net pooling layers')
         parser.add_argument('--drop-prob', type=float, default=0.0, help='Dropout probability')
         parser.add_argument('--num-chans', type=int, default=32, help='Number of U-Net channels')
-        parser.add_argument('--n_blocks', type=int, default=6, help='Number of Neumann Network blocks')
-        parser.add_argument('--batch-size', default=16, type=int, help='Mini batch size')
+        parser.add_argument('--n_blocks', type=int, default=1, help='Number of Neumann Network blocks')
+        parser.add_argument('--batch-size', default=1, type=int, help='Mini batch size')
         parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
         parser.add_argument('--lr-step-size', type=int, default=40,
                             help='Period of learning rate decay')
@@ -236,9 +212,9 @@ def main(args):
         trainer.fit(model)
     else:  # args.mode == 'test'
         assert args.checkpoint is not None
+        trainer = create_trainer(args, logger=False)
         model = NeumannMRIModel.load_from_checkpoint(str(args.checkpoint))
         model.hparams.sample_rate = 1.
-        trainer = create_trainer(args, logger=False)
         trainer.test(model)
 
 
@@ -246,7 +222,7 @@ if __name__ == '__main__':
     parser = Args()
     parser.add_argument('--mode', choices=['train', 'test'], default='train')
     parser.add_argument('--num-epochs', type=int, default=50, help='Number of training epochs')
-    parser.add_argument('--gpus', type=int, default=1)
+    parser.add_argument('--gpus', type=int, default=0)
     parser.add_argument('--exp-dir', type=pathlib.Path, default='experiments',
                         help='Path where model and results should be saved')
     parser.add_argument('--exp', type=str, help='Name of the experiment')

@@ -45,8 +45,8 @@ class NeumannNetwork(nn.Module):
         return image, image_abs
 
     def X_operator(self, img):
-        kspace = 1j * (img[..., 1].numpy())
-        kspace += (img[..., 0].numpy())
+        kspace = 1j * (img[..., 1].detach().numpy())
+        kspace += (img[..., 0].detach().numpy())
         kspace = transforms.to_tensor(kspace)
         return transforms.fft2(kspace)
 
@@ -62,11 +62,11 @@ class NeumannNetwork(nn.Module):
 
         # unrolled gradient iterations
         for i in range(self.n_blocks):
-            print(f"NNeumann Iteration:{i}")
+            print(f"\nNNeumann Iteration:{i}")
             new_img, new_img_abs = self.gramian_helper(runner_img)
             linear_component = runner_img - self.eta * new_img
             learned_component = -self.reg_network(runner_img_abs)
-            learned_component = transforms.to_tensor(np.fft.fft2(learned_component.numpy())).float()
+            learned_component = transforms.to_tensor(np.fft.fft2(learned_component.detach().numpy())).float()
 
             runner_img = linear_component + learned_component
             neumann_sum = neumann_sum + runner_img
