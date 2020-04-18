@@ -16,12 +16,38 @@ from torch.nn import functional as F
 from torch.optim.rmsprop import RMSprop
 
 from common.args import Args
-from common.subsample import create_mask_for_mask_type
 from data import transforms
 from models.mri_model import MRIModel
 from models.neumann.neumann_model import NeumannNetwork
-from models.neumann.operators import ForwardOperator, GramianModel
 from models.unet.unet_model import UnetModel
+
+
+def resize(image, target, resolution, challenge):
+    smallest_width = min(resolution, image.shape[-2])
+    smallest_height = min(resolution, image.shape[-3])
+    if target is not None:
+        smallest_width = min(smallest_width, target.shape[-1])
+        smallest_height = min(smallest_height, target.shape[-2])
+    crop_size = (smallest_height, smallest_width)
+    image = transforms.complex_center_crop(image, crop_size)
+    # Absolute value
+    image = transforms.complex_abs(image)
+    # Apply Root-Sum-of-Squares if multicoil data
+    if challenge == 'multicoil':
+        image = transforms.root_sum_of_squares(image)
+    # Normalize input
+    image, mean, std = transforms.normalize_instance(image, eps=1e-11)
+    image = image.clamp(-6, 6)
+
+    # Normalize target
+    if target is not None:
+        target = transforms.to_tensor(target)
+        target = transforms.center_crop(target, crop_size)
+        target = transforms.normalize(target, mean, std, eps=1e-11)
+        target = target.clamp(-6, 6)
+    else:
+        target = torch.Tensor([0])
+    return image, target, mean, std
 
 
 class DataTransform:
@@ -75,30 +101,31 @@ class DataTransform:
         # Inverse Fourier Transform to get zero filled solution
         image = transforms.ifft2(masked_kspace)
         # Crop input image to given resolution if larger
-        smallest_width = min(self.resolution, image.shape[-2])
-        smallest_height = min(self.resolution, image.shape[-3])
-        if target is not None:
-            smallest_width = min(smallest_width, target.shape[-1])
-            smallest_height = min(smallest_height, target.shape[-2])
-        crop_size = (smallest_height, smallest_width)
-        image = transforms.complex_center_crop(image, crop_size)
-        # Absolute value
-        image = transforms.complex_abs(image)
-        # Apply Root-Sum-of-Squares if multicoil data
-        if self.which_challenge == 'multicoil':
-            image = transforms.root_sum_of_squares(image)
-        # Normalize input
-        image, mean, std = transforms.normalize_instance(image, eps=1e-11)
-        image = image.clamp(-6, 6)
-        # Normalize target
-        if target is not None:
-            target = transforms.to_tensor(target)
-            target = transforms.center_crop(target, crop_size)
-            target = transforms.normalize(target, mean, std, eps=1e-11)
-            target = target.clamp(-6, 6)
-        else:
-            target = torch.Tensor([0])
-        return kspace, image, target, mean, std, fname, slice
+        image, target, mean, std = resize(image, target, self.resolution, self.which_challenge)
+        # smallest_width = min(self.resolution, image.shape[-2])
+        # smallest_height = min(self.resolution, image.shape[-3])
+        # if target is not None:
+        #     smallest_width = min(smallest_width, target.shape[-1])
+        #     smallest_height = min(smallest_height, target.shape[-2])
+        # crop_size = (smallest_height, smallest_width)
+        # image = transforms.complex_center_crop(image, crop_size)
+        # # Absolute value
+        # image = transforms.complex_abs(image)
+        # # Apply Root-Sum-of-Squares if multicoil data
+        # if self.which_challenge == 'multicoil':
+        #     image = transforms.root_sum_of_squares(image)
+        # # Normalize input
+        # image, mean, std = transforms.normalize_instance(image, eps=1e-11)
+        # image = image.clamp(-6, 6)
+        # # Normalize target
+        # if target is not None:
+        #     target = transforms.to_tensor(target)
+        #     target = transforms.center_crop(target, crop_size)
+        #     target = transforms.normalize(target, mean, std, eps=1e-11)
+        #     target = target.clamp(-6, 6)
+        # else:
+        #     target = torch.Tensor([0])
+        return kspace, image, target, fname, slice, mean, std
 
 
 class NeumannMRIModel(MRIModel):
@@ -114,34 +141,18 @@ class NeumannMRIModel(MRIModel):
         )
         self.neumann = NeumannNetwork(reg_network=reg_model, hparams=hparams)
 
-    def resize(self, image, target):
-        smallest_width = min(self.hparams.resolution, image.shape[-2])
-        smallest_height = min(self.resolution, image.shape[-3])
-        if target is not None:
-            smallest_width = min(smallest_width, target.shape[-1])
-            smallest_height = min(smallest_height, target.shape[-2])
-        crop_size = (smallest_height, smallest_width)
-        image = transforms.complex_center_crop(image, crop_size)
-        # Absolute value
-        image = transforms.complex_abs(image)
-        # Apply Root-Sum-of-Squares if multicoil data
-        if self.hparams.challenge == 'multicoil':
-            image = transforms.root_sum_of_squares(image)
-        return image
-
     def forward(self, input):
         return self.neumann(input.unsqueeze(1)).squeeze(1)
 
     def training_step(self, batch, batch_idx):
-        kspace, _, target, mean, std, _, _ = batch
+        kspace, _, target, _, _, _, _ = batch
         output = self.forward(kspace)
-        output = self.resize(output, target)
         loss = F.mse_loss(output, target)
         logs = {'loss': loss.item()}
         return dict(loss=loss, log=logs)
 
     def validation_step(self, batch, batch_idx):
-        kspace, input, target, mean, std, fname, slice = batch
+        kspace, input, target, fname, slice, mean, std = batch
         output = self.forward(kspace)
         mean = mean.unsqueeze(1).unsqueeze(2)
         std = std.unsqueeze(1).unsqueeze(2)
