@@ -21,6 +21,7 @@ import sys
 import imageio
 from pathlib import Path
 
+
 class MRIModel(pl.LightningModule):
     """
     Abstract super class for Deep Learning based reconstruction models.
@@ -54,13 +55,13 @@ class MRIModel(pl.LightningModule):
             sample_rate=sample_rate,
             challenge=self.hparams.challenge
         )
-        #sampler = DistributedSampler(dataset)
+        # sampler = DistributedSampler(dataset)
         return DataLoader(
             dataset=dataset,
             batch_size=self.hparams.batch_size,
             num_workers=4,
             pin_memory=True,
-           # sampler=sampler,
+            # sampler=sampler,
         )
 
     def train_data_transform(self):
