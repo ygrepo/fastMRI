@@ -57,7 +57,7 @@ def default_collate(batch):
 
     images = torch.stack([item[0] for item in batch])
     targets = torch.stack([item[1] for item in batch])
-    kspaces = [item[2] for item in batch]
+    kspaces = torch.stack([item[2] for item in batch])
     means = [item[3] for item in batch]
     stds = [item[4] for item in batch]
     fnames = [item[5] for item in batch]
@@ -158,6 +158,7 @@ class NeumannMRIModel(pl.LightningModule):
         super().__init__()
         # reg_model = REDNet20(num_features= self.hparams.resolution)
         self.hparams = hparams
+        print(f"batch size:{hparams.batch_size}, number of blocks:{hparams.n_blocks}")
         reg_model = UnetModel(
             in_chans=1,
             out_chans=1,
@@ -187,6 +188,7 @@ class NeumannMRIModel(pl.LightningModule):
         )
 
     def forward(self, input):
+        #return self.neumann(input).squeeze(1)
         return self.neumann(input.unsqueeze(1)).squeeze(1)
 
     def train_dataloader(self):
@@ -322,7 +324,7 @@ class NeumannMRIModel(pl.LightningModule):
         parser.add_argument('--drop-prob', type=float, default=0.0, help='Dropout probability')
         parser.add_argument('--num-chans', type=int, default=32, help='Number of U-Net channels')
         parser.add_argument('--n_blocks', type=int, default=1, help='Number of Neumann Network blocks')
-        parser.add_argument('--batch-size', default=1, type=int, help='Mini batch size')
+        parser.add_argument('--batch_size', default=1, type=int, help='Mini batch size')
         parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
         parser.add_argument('--lr-step-size', type=int, default=40,
                             help='Period of learning rate decay')
