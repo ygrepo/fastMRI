@@ -194,7 +194,7 @@ def create_trainer(args, logger):
         checkpoint_callback=True,
         max_nb_epochs=args.num_epochs,
         gpus=args.gpus,
-        distributed_backend="ddp",
+        #distributed_backend="ddp",
         check_val_every_n_epoch=1,
         val_check_interval=1.,
         early_stop_callback=False
