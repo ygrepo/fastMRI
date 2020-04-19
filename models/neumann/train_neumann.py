@@ -7,34 +7,30 @@ LICENSE file in the root directory of this source tree.
 
 import pathlib
 import random
-
-from PIL import Image
-import numpy as np
-import torch
-from pytorch_lightning import Trainer
-from pytorch_lightning.loggers.test_tube import TestTubeLogger
-from torch.nn import functional as F
-from torch.optim.rmsprop import RMSprop
-
-from common.args import Args
-from data import transforms
-from models.mri_model import MRIModel
-from models.neumann.neumann_model import NeumannNetwork
-from models.unet.unet_model import UnetModel
-
-
 from collections import defaultdict
 from pathlib import Path
+
 import numpy as np
 import pytorch_lightning as pl
 import torch
 import torchvision
-import imageio
-from torch.utils.data import DistributedSampler, DataLoader
-import sys
+from PIL import Image
+from pytorch_lightning import Trainer
+from pytorch_lightning.loggers.test_tube import TestTubeLogger
+from torch.nn import functional as F
+from torch.optim.rmsprop import RMSprop
+from torch.utils.data import DataLoader
+from torch.utils.data.sampler import RandomSampler
 
 from common import evaluate
+from common.args import Args
 from common.utils import save_reconstructions
+from data import transforms
+from data.mri_data import SliceData
+from models.neumann.neumann_model import NeumannNetwork
+from models.unet.unet_model import UnetModel
+
+
 def resize(image, target, resolution, challenge):
     smallest_width = min(resolution, image.shape[-2])
     smallest_height = min(resolution, image.shape[-3])
@@ -118,10 +114,11 @@ class DataTransform:
         return kspace, image, target, fname, slice, mean, std
 
 
-class NeumannMRIModel(MRIModel):
+class NeumannMRIModel(pl.LightningModule):
     def __init__(self, hparams):
-        super().__init__(hparams)
+        super().__init__()
         # reg_model = REDNet20(num_features= self.hparams.resolution)
+        self.hparams = hparams
         reg_model = UnetModel(
             in_chans=1,
             out_chans=1,
@@ -131,17 +128,41 @@ class NeumannMRIModel(MRIModel):
         )
         self.neumann = NeumannNetwork(reg_network=reg_model, hparams=hparams)
 
+    def _create_data_loader(self, data_transform, data_partition, sample_rate=None):
+        sample_rate = sample_rate or self.hparams.sample_rate
+        dataset = SliceData(
+            root=self.hparams.data_path / f'{self.hparams.challenge}_{data_partition}',
+            transform=data_transform,
+            sample_rate=sample_rate,
+            challenge=self.hparams.challenge
+        )
+        sampler = RandomSampler(dataset)
+        # sampler = DistributedSampler(dataset)
+        return DataLoader(
+            dataset=dataset,
+            batch_size=self.hparams.batch_size,
+            num_workers=4,
+            pin_memory=True,
+            sampler=sampler,
+        )
+
     def forward(self, input):
         return self.neumann(input.unsqueeze(1)).squeeze(1)
+
+    def train_dataloader(self):
+        return self._create_data_loader(self.train_data_transform(), data_partition='train')
 
     def training_step(self, batch, batch_idx):
         print(f"Training step, batch_idx:{batch_idx}")
         kspace, input, target, fname, slice, mean, std = batch
         output = self.forward(kspace)
         loss = F.mse_loss(output, target)
-        logs = {'loss': loss.item()}
+        logs = {"loss": loss.item()}
         print(f"loss:{loss}")
         return dict(loss=loss, log=logs)
+
+    def val_dataloader(self):
+        return self._create_data_loader(self.val_data_transform(), data_partition='val')
 
     def validation_step(self, batch, batch_idx):
         print(f"Validation step, batch_idx:{batch_idx}")
@@ -162,22 +183,21 @@ class NeumannMRIModel(MRIModel):
         outputs = defaultdict(list)
         targets = defaultdict(list)
         for log in val_logs:
-            losses.append(log['val_loss'].cpu().numpy())
-            for i, (fname, slice) in enumerate(zip(log['fname'], log['slice'])):
-                outputs[fname].append((slice, log['output'][i]))
-                targets[fname].append((slice, log['target'][i]))
+            losses.append(log["val_loss"].cpu().numpy())
+            for i, (fname, slice) in enumerate(zip(log["fname"], log["slice"])):
+                outputs[fname].append((slice, log["output"][i]))
+                targets[fname].append((slice, log["target"][i]))
         metrics = dict(val_loss=losses, nmse=[], ssim=[], psnr=[])
         for fname in outputs:
             output = np.stack([out for _, out in sorted(outputs[fname])])
             target = np.stack([tgt for _, tgt in sorted(targets[fname])])
-            metrics['nmse'].append(evaluate.nmse(target, output))
-            metrics['ssim'].append(evaluate.ssim(target, output))
-            metrics['psnr'].append(evaluate.psnr(target, output))
+            metrics["nmse"].append(evaluate.nmse(target, output))
+            metrics["ssim"].append(evaluate.ssim(target, output))
+            metrics["psnr"].append(evaluate.psnr(target, output))
         metrics = {metric: np.mean(values) for metric, values in metrics.items()}
         print(metrics, '\n')
         self.logger.log_metrics(metrics)
         return dict(log=metrics, **metrics)
-
 
     def _visualize(self, val_logs):
         def _normalize(image):
@@ -217,6 +237,9 @@ class NeumannMRIModel(MRIModel):
         self._visualize(val_logs)
         return self._evaluate(val_logs)
 
+    def test_dataloader(self):
+        return self._create_data_loader(self.test_data_transform(), data_partition='test', sample_rate=1.)
+
     def test_step(self, batch, batch_idx):
         kspace, input, target, fname, slice, mean, std = batch
         output = self.forward(kspace)
@@ -227,6 +250,16 @@ class NeumannMRIModel(MRIModel):
             'slice': slice,
             'output': (output * std + mean).cpu().numpy(),
         }
+
+    def test_epoch_end(self, test_logs):
+        outputs = defaultdict(list)
+        for log in test_logs:
+            for i, (fname, slice) in enumerate(zip(log['fname'], log['slice'])):
+                outputs[fname].append((slice, log['output'][i]))
+        for fname in outputs:
+            outputs[fname] = np.stack([out for _, out in sorted(outputs[fname])])
+        save_reconstructions(outputs, self.hparams.exp_dir / self.hparams.exp / 'reconstructions')
+        return dict()
 
     def configure_optimizers(self):
         optim = RMSprop(self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.weight_decay)
@@ -249,7 +282,7 @@ class NeumannMRIModel(MRIModel):
         parser.add_argument('--drop-prob', type=float, default=0.0, help='Dropout probability')
         parser.add_argument('--num-chans', type=int, default=32, help='Number of U-Net channels')
         parser.add_argument('--n_blocks', type=int, default=1, help='Number of Neumann Network blocks')
-        parser.add_argument('--batch-size', default=1, type=int, help='Mini batch size')
+        parser.add_argument('--batch-size', default=16, type=int, help='Mini batch size')
         parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
         parser.add_argument('--lr-step-size', type=int, default=40,
                             help='Period of learning rate decay')
@@ -267,7 +300,7 @@ def create_trainer(args, logger):
         checkpoint_callback=True,
         max_nb_epochs=args.num_epochs,
         gpus=args.gpus,
-        #distributed_backend="ddp",
+        distributed_backend="ddp",
         check_val_every_n_epoch=1,
         val_check_interval=1.,
         early_stop_callback=False
