@@ -193,7 +193,7 @@ class NeumannMRIModel(pl.LightningModule):
         return self._create_data_loader(self.train_data_transform(), data_partition='train')
 
     def training_step(self, batch, batch_idx):
-        print(f"Training step, batch_idx:{batch_idx}")
+        #print(f"Training step, batch_idx:{batch_idx}")
         image, target, kspace, mean, std, fname, slice = batch
         output = self.forward(kspace)
         loss = F.mse_loss(output, target)
@@ -205,7 +205,7 @@ class NeumannMRIModel(pl.LightningModule):
         return self._create_data_loader(self.val_data_transform(), data_partition='val')
 
     def validation_step(self, batch, batch_idx):
-        print(f"Validation step, batch_idx:{batch_idx}")
+        #print(f"Validation step, batch_idx:{batch_idx}")
         image, target, kspace, mean, std, fname, slice = batch
         output = self.forward(kspace)
         mean = mean.unsqueeze(1).unsqueeze(2)
