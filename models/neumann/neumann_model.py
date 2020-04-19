@@ -12,12 +12,39 @@ class NeumannNetwork(nn.Module):
     def __init__(self, reg_network=None, hparams=None):
         super(NeumannNetwork, self).__init__()
         self.hparams = hparams
+        self.device = "cuda"
+        if hparams.gpus == 0:
+            self.device = "cpu"
         self.mask_func = create_mask_for_mask_type(self.hparams.mask_type, self.hparams.center_fractions,
                                                    self.hparams.accelerations)
         self.reg_network = reg_network
         self.n_blocks = hparams.n_blocks
         self.eta = nn.Parameter(torch.Tensor([0.1]), requires_grad=True)
         self.preconditioned = False
+
+    def apply_mask(self, data, mask_func, seed=None):
+        """
+        Subsample given k-space by multiplying with a mask.
+
+        Args:
+            data (torch.Tensor): The input k-space data. This should have at least 3 dimensions, where
+                dimensions -3 and -2 are the spatial dimensions, and the final dimension has size
+                2 (for complex values).
+            mask_func (callable): A function that takes a shape (tuple of ints) and a random
+                number seed and returns a mask.
+            seed (int or 1-d array_like, optional): Seed for the random number generator.
+
+        Returns:
+            (tuple): tuple containing:
+                masked data (torch.Tensor): Subsampled k-space data
+                mask (torch.Tensor): The generated mask
+        """
+        shape = np.array(data.shape)
+        shape[:-3] = 1
+        mask = mask_func(shape, seed)
+        mask = mask.to(self.device)
+        data = data.to(self.device)
+        return torch.where(mask == 0, torch.Tensor([0]).to(self.device), data), mask
 
     def resize(self, image, challenge: str="singlecoil"):
         smallest_width = min(self.hparams.resolution, image.shape[-2])
@@ -35,7 +62,7 @@ class NeumannNetwork(nn.Module):
         return image, image_abs
 
     def forward_adjoint_helper(self, kspace):
-        masked_kspace, _ = transforms.apply_mask(kspace, self.mask_func, self.hparams.seed)
+        masked_kspace, _ = self.apply_mask(kspace, self.mask_func, self.hparams.seed)
         if not torch.is_tensor(masked_kspace):
             kspace_tensor = transforms.to_tensor(masked_kspace)
         else:
@@ -66,7 +93,8 @@ class NeumannNetwork(nn.Module):
             new_img, new_img_abs = self.gramian_helper(runner_img)
             linear_component = runner_img - self.eta * new_img
             learned_component = -self.reg_network(runner_img_abs)
-            learned_component = transforms.to_tensor(np.fft.fft2(learned_component.detach().numpy())).float()
+            learned_component = transforms.to_tensor(np.fft.fft2(learned_component.detach().cpu().numpy())).float()
+            learned_component = learned_component.to(self.device)
 
             runner_img = linear_component + learned_component
             neumann_sum = neumann_sum + runner_img

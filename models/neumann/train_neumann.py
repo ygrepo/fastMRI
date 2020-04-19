@@ -119,9 +119,7 @@ class NeumannMRIModel(MRIModel):
         self.neumann = NeumannNetwork(reg_network=reg_model, hparams=hparams)
 
     def forward(self, input):
-        output = self.neumann(input.unsqueeze(1)).squeeze(1)
-        print(f"output:{output.shape}")
-        return output
+        return self.neumann(input.unsqueeze(1)).squeeze(1)
 
     def training_step(self, batch, batch_idx):
         print(f"Training step, batch_idx:{batch_idx}")

@@ -60,7 +60,7 @@ class MRIModel(pl.LightningModule):
             dataset=dataset,
             batch_size=self.hparams.batch_size,
             num_workers=4,
-            pin_memory=True,
+            pin_memory=False,
             # sampler=sampler,
         )
 
