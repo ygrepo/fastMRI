@@ -89,7 +89,7 @@ class NeumannNetwork(nn.Module):
 
         # unrolled gradient iterations
         for i in range(self.n_blocks):
-            print(f"\nNNeumann Iteration:{i}")
+            #print(f"\nNNeumann Iteration:{i}")
             new_img, new_img_abs = self.gramian_helper(runner_img)
             linear_component = runner_img - self.eta * new_img
             learned_component = -self.reg_network(runner_img_abs)
