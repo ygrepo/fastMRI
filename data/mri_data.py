@@ -7,6 +7,7 @@ LICENSE file in the root directory of this source tree.
 
 import pathlib
 import random
+import torch
 
 import h5py
 from torch.utils.data import Dataset

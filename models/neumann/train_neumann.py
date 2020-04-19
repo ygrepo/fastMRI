@@ -30,6 +30,44 @@ from data.mri_data import SliceData
 from models.neumann.neumann_model import NeumannNetwork
 from models.unet.unet_model import UnetModel
 
+def default_collate(batch):
+    """
+    Override `default_collate` https://pytorch.org/docs/stable/_modules/torch/utils/data/dataloader.html#DataLoader
+
+    Reference:
+    def default_collate(batch) at https://pytorch.org/docs/stable/_modules/torch/utils/data/dataloader.html#DataLoader
+    https://discuss.pytorch.org/t/how-to-create-a-dataloader-with-variable-size-input/8278/3
+    https://github.com/pytorch/pytorch/issues/1512
+
+    We need our own collate function that wraps things up (imge, mask, label).
+
+    In this setup,  batch is a list of tuples (the result of calling: img, mask, label = Dataset[i].
+    The output of this function is four elements:
+        . data: a pytorch tensor of size (batch_size, c, h, w) of float32 . Each sample is a tensor of shape (c, h_,
+        w_) that represents a cropped patch from an image (or the entire image) where: c is the depth of the patches (
+        since they are RGB, so c=3),  h is the height of the patch, and w_ is the its width.
+        . mask: a list of pytorch tensors of size (batch_size, 1, h, w) full of 1 and 0. The mask of the ENTIRE image (no
+        cropping is performed). Images does not have the same size, and the same thing goes for the masks. Therefore,
+        we can't put the masks in one tensor.
+        . target: a vector (pytorch tensor) of length batch_size of type torch.LongTensor containing the image-level
+        labels.
+    :param batch: list of tuples (img, mask, label)
+    :return: 3 elements: tensor data, list of tensors of masks, tensor of labels.
+    """
+
+    images = torch.stack([item[0] for item in batch])
+    targets = torch.stack([item[1] for item in batch])
+    kspaces = [item[2] for item in batch]
+    means = [item[3] for item in batch]
+    stds = [item[4] for item in batch]
+    fnames = [item[5] for item in batch]
+    slice_infos = [item[6] for item in batch]
+
+    # data = torch.stack([item[0] for item in batch])
+    # mask = [item[1] for item in batch]  # each element is of size (1, h*, w*). where (h*, w*) changes from mask to another.
+    # target = torch.LongTensor([item[2] for item in batch])  # image labels.
+
+    return images, targets, kspaces, means, stds, fnames, slice_infos
 
 def resize(image, target, resolution, challenge):
     smallest_width = min(resolution, image.shape[-2])
@@ -82,7 +120,7 @@ class DataTransform:
         self.which_challenge = which_challenge
         self.use_seed = use_seed
 
-    def __call__(self, kspace, target, attrs, fname, slice):
+    def __call__(self, kspace, target, attrs, fname, slice_info):
         """
         Args:
             kspace (numpy.array): Input k-space of shape (num_coils, rows, cols, 2) for multi-coil
@@ -111,7 +149,8 @@ class DataTransform:
         image = transforms.ifft2(masked_kspace)
         # Crop input image to given resolution if larger
         image, target, mean, std = resize(image, target, self.resolution, self.which_challenge)
-        return kspace, image, target, fname, slice, mean, std
+        #print(f"image:{image.shape}, target:{target.shape}, mean:{mean}, {std}, {fname}, {slice_info}")
+        return image, target, kspace, mean, std, fname, slice_info
 
 
 class NeumannMRIModel(pl.LightningModule):
@@ -144,6 +183,7 @@ class NeumannMRIModel(pl.LightningModule):
             num_workers=4,
             pin_memory=True,
             sampler=sampler,
+            #collate_fn=default_collate
         )
 
     def forward(self, input):
@@ -154,7 +194,7 @@ class NeumannMRIModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         print(f"Training step, batch_idx:{batch_idx}")
-        kspace, input, target, fname, slice, mean, std = batch
+        image, target, kspace, mean, std, fname, slice = batch
         output = self.forward(kspace)
         loss = F.mse_loss(output, target)
         logs = {"loss": loss.item()}
@@ -166,7 +206,7 @@ class NeumannMRIModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         print(f"Validation step, batch_idx:{batch_idx}")
-        kspace, input, target, fname, slice, mean, std = batch
+        image, target, kspace, mean, std, fname, slice = batch
         output = self.forward(kspace)
         mean = mean.unsqueeze(1).unsqueeze(2)
         std = std.unsqueeze(1).unsqueeze(2)
@@ -241,7 +281,7 @@ class NeumannMRIModel(pl.LightningModule):
         return self._create_data_loader(self.test_data_transform(), data_partition='test', sample_rate=1.)
 
     def test_step(self, batch, batch_idx):
-        kspace, input, target, fname, slice, mean, std = batch
+        image, target, kspace, mean, std, fname, slice = batch
         output = self.forward(kspace)
         mean = mean.unsqueeze(1).unsqueeze(2)
         std = std.unsqueeze(1).unsqueeze(2)
@@ -281,8 +321,8 @@ class NeumannMRIModel(pl.LightningModule):
         parser.add_argument('--num-pools', type=int, default=4, help='Number of U-Net pooling layers')
         parser.add_argument('--drop-prob', type=float, default=0.0, help='Dropout probability')
         parser.add_argument('--num-chans', type=int, default=32, help='Number of U-Net channels')
-        parser.add_argument('--n_blocks', type=int, default=1, help='Number of Neumann Network blocks')
-        parser.add_argument('--batch-size', default=16, type=int, help='Mini batch size')
+        parser.add_argument('--n_blocks', type=int, default=6, help='Number of Neumann Network blocks')
+        parser.add_argument('--batch-size', default=1, type=int, help='Mini batch size')
         parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
         parser.add_argument('--lr-step-size', type=int, default=40,
                             help='Period of learning rate decay')
@@ -300,7 +340,7 @@ def create_trainer(args, logger):
         checkpoint_callback=True,
         max_nb_epochs=args.num_epochs,
         gpus=args.gpus,
-        distributed_backend="ddp",
+        #distributed_backend="ddp",
         check_val_every_n_epoch=1,
         val_check_interval=1.,
         early_stop_callback=False
