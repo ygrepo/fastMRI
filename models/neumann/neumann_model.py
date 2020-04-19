@@ -72,8 +72,8 @@ class NeumannNetwork(nn.Module):
         return image, image_abs
 
     def X_operator(self, img):
-        kspace = 1j * (img[..., 1].cpu().numpy())
-        kspace += (img[..., 0].cpu().numpy())
+        kspace = 1j * (img[..., 1].detach().cpu().numpy())
+        kspace += (img[..., 0].detach().cpu().numpy())
         kspace = transforms.to_tensor(kspace)
         return transforms.fft2(kspace)
 
