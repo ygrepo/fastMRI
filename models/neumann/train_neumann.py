@@ -321,7 +321,7 @@ class NeumannMRIModel(pl.LightningModule):
         parser.add_argument('--num-pools', type=int, default=4, help='Number of U-Net pooling layers')
         parser.add_argument('--drop-prob', type=float, default=0.0, help='Dropout probability')
         parser.add_argument('--num-chans', type=int, default=32, help='Number of U-Net channels')
-        parser.add_argument('--n_blocks', type=int, default=6, help='Number of Neumann Network blocks')
+        parser.add_argument('--n_blocks', type=int, default=1, help='Number of Neumann Network blocks')
         parser.add_argument('--batch-size', default=1, type=int, help='Mini batch size')
         parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
         parser.add_argument('--lr-step-size', type=int, default=40,
