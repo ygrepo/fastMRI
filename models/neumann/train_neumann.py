@@ -30,44 +30,39 @@ from data.mri_data import SliceData
 from models.neumann.neumann_model import NeumannNetwork
 from models.unet.unet_model import UnetModel
 
+
+def padding_tensor_kspaces(batch):
+    """
+    :param sequences: list of tensors
+    :return:
+    """
+    sequences = [item[2] for item in batch]
+    max_0 = max([s.shape[0] for s in sequences])
+    max_1 = max([s.shape[1] for s in sequences])
+    max_2 = max([s.shape[2] for s in sequences])
+    out_tensor = torch.zeros((len(sequences), max_0, max_1, max_2))
+    for i, tensor in enumerate(sequences):
+        tensor = sequences[i]
+        length = tensor.shape[1]
+        out_tensor[i, :, :length, :] = tensor
+    return out_tensor
+
+
 def default_collate(batch):
     """
     Override `default_collate` https://pytorch.org/docs/stable/_modules/torch/utils/data/dataloader.html#DataLoader
 
-    Reference:
-    def default_collate(batch) at https://pytorch.org/docs/stable/_modules/torch/utils/data/dataloader.html#DataLoader
-    https://discuss.pytorch.org/t/how-to-create-a-dataloader-with-variable-size-input/8278/3
-    https://github.com/pytorch/pytorch/issues/1512
-
-    We need our own collate function that wraps things up (imge, mask, label).
-
-    In this setup,  batch is a list of tuples (the result of calling: img, mask, label = Dataset[i].
-    The output of this function is four elements:
-        . data: a pytorch tensor of size (batch_size, c, h, w) of float32 . Each sample is a tensor of shape (c, h_,
-        w_) that represents a cropped patch from an image (or the entire image) where: c is the depth of the patches (
-        since they are RGB, so c=3),  h is the height of the patch, and w_ is the its width.
-        . mask: a list of pytorch tensors of size (batch_size, 1, h, w) full of 1 and 0. The mask of the ENTIRE image (no
-        cropping is performed). Images does not have the same size, and the same thing goes for the masks. Therefore,
-        we can't put the masks in one tensor.
-        . target: a vector (pytorch tensor) of length batch_size of type torch.LongTensor containing the image-level
-        labels.
-    :param batch: list of tuples (img, mask, label)
-    :return: 3 elements: tensor data, list of tensors of masks, tensor of labels.
     """
 
     images = torch.stack([item[0] for item in batch])
     targets = torch.stack([item[1] for item in batch])
-    kspaces = torch.stack([item[2] for item in batch])
-    means = [item[3] for item in batch]
-    stds = [item[4] for item in batch]
+    kspaces = padding_tensor_kspaces(batch)
+    means = torch.stack([item[3] for item in batch])
+    stds = torch.stack([item[4] for item in batch])
     fnames = [item[5] for item in batch]
-    slice_infos = [item[6] for item in batch]
-
-    # data = torch.stack([item[0] for item in batch])
-    # mask = [item[1] for item in batch]  # each element is of size (1, h*, w*). where (h*, w*) changes from mask to another.
-    # target = torch.LongTensor([item[2] for item in batch])  # image labels.
-
+    slice_infos = torch.FloatTensor([item[6] for item in batch])
     return images, targets, kspaces, means, stds, fnames, slice_infos
+
 
 def resize(image, target, resolution, challenge):
     smallest_width = min(resolution, image.shape[-2])
@@ -137,19 +132,10 @@ class DataTransform:
                 std (float): Standard deviation value used for normalization.
         """
         kspace = transforms.to_tensor(kspace)
-        # Apply mask
-        if self.mask_func:
-            print("Applying mask")
-            seed = None if not self.use_seed else tuple(map(ord, fname))
-            masked_kspace, mask = transforms.apply_mask(kspace, self.mask_func, seed)
-        else:
-            masked_kspace = kspace
-
         # Inverse Fourier Transform to get zero filled solution
-        image = transforms.ifft2(masked_kspace)
+        image = transforms.ifft2(kspace)
         # Crop input image to given resolution if larger
         image, target, mean, std = resize(image, target, self.resolution, self.which_challenge)
-        #print(f"image:{image.shape}, target:{target.shape}, mean:{mean}, {std}, {fname}, {slice_info}")
         return image, target, kspace, mean, std, fname, slice_info
 
 
@@ -184,18 +170,20 @@ class NeumannMRIModel(pl.LightningModule):
             num_workers=4,
             pin_memory=True,
             sampler=sampler,
-            #collate_fn=default_collate
+            collate_fn=default_collate
         )
 
     def forward(self, input):
-        #return self.neumann(input).squeeze(1)
-        return self.neumann(input.unsqueeze(1)).squeeze(1)
+        return self.neumann(input).squeeze(1)
+
+    def train_data_transform(self):
+        return DataTransform(self.hparams.resolution, self.hparams.challenge)
 
     def train_dataloader(self):
         return self._create_data_loader(self.train_data_transform(), data_partition='train')
 
     def training_step(self, batch, batch_idx):
-        #print(f"Training step, batch_idx:{batch_idx}")
+        # print(f"Training step, batch_idx:{batch_idx}")
         image, target, kspace, mean, std, fname, slice = batch
         output = self.forward(kspace)
         loss = F.mse_loss(output, target)
@@ -203,11 +191,14 @@ class NeumannMRIModel(pl.LightningModule):
         print(f"loss:{loss}")
         return dict(loss=loss, log=logs)
 
+    def val_data_transform(self):
+        return DataTransform(self.hparams.resolution, self.hparams.challenge)
+
     def val_dataloader(self):
         return self._create_data_loader(self.val_data_transform(), data_partition='val')
 
     def validation_step(self, batch, batch_idx):
-        #print(f"Validation step, batch_idx:{batch_idx}")
+        # print(f"Validation step, batch_idx:{batch_idx}")
         image, target, kspace, mean, std, fname, slice = batch
         output = self.forward(kspace)
         mean = mean.unsqueeze(1).unsqueeze(2)
@@ -279,6 +270,9 @@ class NeumannMRIModel(pl.LightningModule):
         self._visualize(val_logs)
         return self._evaluate(val_logs)
 
+    def test_data_transform(self):
+        return DataTransform(self.hparams.resolution, self.hparams.challenge)
+
     def test_dataloader(self):
         return self._create_data_loader(self.test_data_transform(), data_partition='test', sample_rate=1.)
 
@@ -309,22 +303,13 @@ class NeumannMRIModel(pl.LightningModule):
         scheduler = torch.optim.lr_scheduler.StepLR(optim, self.hparams.lr_step_size, self.hparams.lr_gamma)
         return [optim], [scheduler]
 
-    def train_data_transform(self):
-        return DataTransform(self.hparams.resolution, self.hparams.challenge)
-
-    def val_data_transform(self):
-        return DataTransform(self.hparams.resolution, self.hparams.challenge)
-
-    def test_data_transform(self):
-        return DataTransform(self.hparams.resolution, self.hparams.challenge)
-
     @staticmethod
     def add_model_specific_args(parser):
         parser.add_argument('--num-pools', type=int, default=4, help='Number of U-Net pooling layers')
         parser.add_argument('--drop-prob', type=float, default=0.0, help='Dropout probability')
         parser.add_argument('--num-chans', type=int, default=32, help='Number of U-Net channels')
-        parser.add_argument('--n_blocks', type=int, default=1, help='Number of Neumann Network blocks')
-        parser.add_argument('--batch_size', default=1, type=int, help='Mini batch size')
+        parser.add_argument('--n_blocks', type=int, default=6, help='Number of Neumann Network blocks')
+        parser.add_argument('--batch_size', default=16, type=int, help='Mini batch size')
         parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
         parser.add_argument('--lr-step-size', type=int, default=40,
                             help='Period of learning rate decay')
@@ -342,7 +327,7 @@ def create_trainer(args, logger):
         checkpoint_callback=True,
         max_nb_epochs=args.num_epochs,
         gpus=args.gpus,
-        #distributed_backend="ddp",
+        # distributed_backend="ddp",
         check_val_every_n_epoch=1,
         val_check_interval=1.,
         early_stop_callback=False

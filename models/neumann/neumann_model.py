@@ -39,7 +39,6 @@ class NeumannNetwork(nn.Module):
                 masked data (torch.Tensor): Subsampled k-space data
                 mask (torch.Tensor): The generated mask
         """
-        #print(data.shape)
         shape = np.array(data.shape)
         shape[:-3] = 1
         mask = mask_func(shape, seed)
@@ -73,9 +72,6 @@ class NeumannNetwork(nn.Module):
         return image, image_abs
 
     def X_operator(self, img):
-        #kspace = 1j * (img[..., 1].detach().cpu().numpy())
-        #kspace += (img[..., 0].detach().cpu().numpy())
-        #kspace = transforms.to_tensor(kspace)
         return transforms.fft2(img)
 
     def gramian_helper(self, img):
@@ -91,11 +87,11 @@ class NeumannNetwork(nn.Module):
         # unrolled gradient iterations
         for i in range(self.n_blocks):
             #print(f"\nNNeumann Iteration:{i}")
-            new_img, new_img_abs = self.gramian_helper(runner_img)
-            linear_component = runner_img - self.eta * new_img
-            #print(runner_img_abs.shape)
-            learned_component = -self.reg_network(new_img_abs)
-            learned_component = torch.rfft(learned_component, 1, onesided=False).float()
+            gramian_img, gramian_img_abs = self.gramian_helper(runner_img)
+            linear_component = runner_img - self.eta * gramian_img
+            gramian_img_abs = gramian_img_abs.unsqueeze(0).permute((1,0,2,3))
+            learned_component = -self.reg_network(gramian_img_abs)
+            learned_component = torch.rfft(learned_component, 1, onesided=False).float().squeeze()
 
             runner_img = linear_component + learned_component
             neumann_sum = neumann_sum + runner_img
