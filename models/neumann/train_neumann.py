@@ -5,18 +5,20 @@ This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 """
 
+# Common python libraries
 import pathlib
 import random
 from collections import defaultdict
 from pathlib import Path
 
+# Numpy and Pandas
 import numpy as np
 import pandas as pd
 
+# PyTorch
 import pytorch_lightning as pl
 import torch
 import torchvision
-from PIL import Image
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers.test_tube import TestTubeLogger
 from torch.nn import functional as F
@@ -24,6 +26,9 @@ from torch.optim.rmsprop import RMSprop
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import RandomSampler
 
+from PIL import Image
+
+# fastMRI
 from common import evaluate
 from common.args import Args
 from common.utils import save_reconstructions
@@ -31,6 +36,8 @@ from data import transforms
 from data.mri_data import SliceData
 from models.neumann.neumann_model import NeumannNetwork
 from models.unet.unet_model import UnetModel
+from models.neumann.operators import resize, forward_adjoint_helper
+from common.subsample import create_mask_for_mask_type
 
 
 
@@ -67,32 +74,32 @@ def default_collate(batch):
     return images, targets, kspaces, means, stds, fnames, slice_infos
 
 
-def resize(image, target, resolution, challenge):
-    smallest_width = min(resolution, image.shape[-2])
-    smallest_height = min(resolution, image.shape[-3])
-    if target is not None:
-        smallest_width = min(smallest_width, target.shape[-1])
-        smallest_height = min(smallest_height, target.shape[-2])
-    crop_size = (smallest_height, smallest_width)
-    image = transforms.complex_center_crop(image, crop_size)
-    # Absolute value
-    image = transforms.complex_abs(image)
-    # Apply Root-Sum-of-Squares if multicoil data
-    if challenge == 'multicoil':
-        image = transforms.root_sum_of_squares(image)
-    # Normalize input
-    image, mean, std = transforms.normalize_instance(image, eps=1e-11)
-    image = image.clamp(-6, 6)
-
-    # Normalize target
-    if target is not None:
-        target = transforms.to_tensor(target)
-        target = transforms.center_crop(target, crop_size)
-        target = transforms.normalize(target, mean, std, eps=1e-11)
-        target = target.clamp(-6, 6)
-    else:
-        target = torch.Tensor([0])
-    return image, target, mean, std
+# def resize(image, target, resolution, challenge):
+#     smallest_width = min(resolution, image.shape[-2])
+#     smallest_height = min(resolution, image.shape[-3])
+#     if target is not None:
+#         smallest_width = min(smallest_width, target.shape[-1])
+#         smallest_height = min(smallest_height, target.shape[-2])
+#     crop_size = (smallest_height, smallest_width)
+#     image = transforms.complex_center_crop(image, crop_size)
+#     # Absolute value
+#     image = transforms.complex_abs(image)
+#     # Apply Root-Sum-of-Squares if multicoil data
+#     if challenge == 'multicoil':
+#         image = transforms.root_sum_of_squares(image)
+#     # Normalize input
+#     image, mean, std = transforms.normalize_instance(image, eps=1e-11)
+#     image = image.clamp(-6, 6)
+#
+#     # Normalize target
+#     if target is not None:
+#         target = transforms.to_tensor(target)
+#         target = transforms.center_crop(target, crop_size)
+#         target = transforms.normalize(target, mean, std, eps=1e-11)
+#         target = target.clamp(-6, 6)
+#     else:
+#         target = torch.Tensor([0])
+#     return image, target, mean, std
 
 
 class DataTransform:
@@ -100,22 +107,19 @@ class DataTransform:
     Data Transformer for training U-Net models.
     """
 
-    def __init__(self, resolution, which_challenge, mask_func=None, use_seed=True):
+    def __init__(self, hparams, mask_func=None, use_seed=True):
         """
         Args:
             mask_func (common.subsample.MaskFunc): A function that can create a mask of
                 appropriate shape.
-            resolution (int): Resolution of the image.
-            which_challenge (str): Either "singlecoil" or "multicoil" denoting the dataset.
             use_seed (bool): If true, this class computes a pseudo random number generator seed
                 from the filename. This ensures that the same mask is used for all the slices of
                 a given volume every time.
         """
-        if which_challenge not in ('singlecoil', 'multicoil'):
+        if hparams.challenge not in ("singlecoil", "multicoil"):
             raise ValueError(f'Challenge should either be "singlecoil" or "multicoil"')
         self.mask_func = mask_func
-        self.resolution = resolution
-        self.which_challenge = which_challenge
+        self.hparams = hparams
         self.use_seed = use_seed
 
     def __call__(self, kspace, target, attrs, fname, slice_info):
@@ -138,7 +142,7 @@ class DataTransform:
         # Inverse Fourier Transform to get zero filled solution
         image = transforms.ifft2(kspace)
         # Crop input image to given resolution if larger
-        image, target, mean, std = resize(image, target, self.resolution, self.which_challenge)
+        image, _, target, mean, std = resize(self.hparams, image, target)
         return image, target, kspace, mean, std, fname, slice_info
 
 
@@ -147,6 +151,9 @@ class NeumannMRIModel(pl.LightningModule):
         super().__init__()
         # reg_model = REDNet20(num_features= self.hparams.resolution)
         self.hparams = hparams
+        self.device = "cuda"
+        if hparams.gpus == 0:
+            self.device = "cpu"
         print(f"batch size:{hparams.batch_size}, number of blocks:{hparams.n_blocks}")
         reg_model = UnetModel(
             in_chans=1,
@@ -171,7 +178,7 @@ class NeumannMRIModel(pl.LightningModule):
             dataset=dataset,
             batch_size=self.hparams.batch_size,
             num_workers=4,
-            pin_memory=True,
+            pin_memory=False,
             sampler=sampler,
             collate_fn=default_collate
         )
@@ -180,7 +187,7 @@ class NeumannMRIModel(pl.LightningModule):
         return self.neumann(input).squeeze(1)
 
     def train_data_transform(self):
-        return DataTransform(self.hparams.resolution, self.hparams.challenge)
+        return DataTransform(self.hparams)
 
     def train_dataloader(self):
         return self._create_data_loader(self.train_data_transform(), data_partition='train')
@@ -195,7 +202,7 @@ class NeumannMRIModel(pl.LightningModule):
         return dict(loss=loss, log=logs)
 
     def val_data_transform(self):
-        return DataTransform(self.hparams.resolution, self.hparams.challenge)
+        return DataTransform(self.hparams)
 
     def val_dataloader(self):
         return self._create_data_loader(self.val_data_transform(), data_partition='val')
@@ -204,14 +211,18 @@ class NeumannMRIModel(pl.LightningModule):
         # print(f"Validation step, batch_idx:{batch_idx}")
         image, target, kspace, mean, std, fname, slice = batch
         output = self.forward(kspace)
+        mask = create_mask_for_mask_type(self.hparams.mask_type, self.hparams.center_fractions,
+                                         self.hparams.accelerations)
+        _, undersampled_img = forward_adjoint_helper(self.device, self.hparams, mask, kspace, None)
         mean = mean.unsqueeze(1).unsqueeze(2)
         std = std.unsqueeze(1).unsqueeze(2)
         return {
-            'fname': fname,
-            'slice': slice,
-            'output': (output * std + mean).cpu().numpy(),
-            'target': (target * std + mean).cpu().numpy(),
-            'val_loss': F.mse_loss(output, target),
+            "fname": fname,
+            "slice": slice,
+            "output": (output * std + mean).cpu().numpy(),
+            "target": (target * std + mean).cpu().numpy(),
+            "undersampled_img": (undersampled_img * std + mean).cpu().numpy(),
+            "val_loss": F.mse_loss(output, target),
         }
 
     def _evaluate(self, val_logs):
@@ -265,22 +276,24 @@ class NeumannMRIModel(pl.LightningModule):
         num_logs = len(val_logs)
         num_viz_images = 16
         step = (num_logs + num_viz_images - 1) // num_viz_images
-        outputs, targets = [], []
+        outputs, targets, undersampled_imgs = [], [], []
         for i in range(0, num_logs, step):
-            outputs.append(_normalize(val_logs[i]['output'][0]))
-            targets.append(_normalize(val_logs[i]['target'][0]))
+            outputs.append(_normalize(val_logs[i]["output"][0]))
+            targets.append(_normalize(val_logs[i]["target"][0]))
+            undersampled_imgs.append(_normalize(val_logs[i]["undersampled_img"][0]))
         outputs = np.stack(outputs)
         targets = np.stack(targets)
-        _save_image(targets, 'Target')
-        _save_image(outputs, 'Reconstruction')
-        _save_image(np.abs(targets - outputs), 'Error')
+        _save_image(targets, "target")
+        _save_image(outputs, "reconstruction")
+        _save_image(undersampled_imgs, "undersampled")
+        _save_image(np.abs(targets - outputs), "error")
 
     def validation_epoch_end(self, val_logs):
         self._visualize(val_logs)
         return self._evaluate(val_logs)
 
     def test_data_transform(self):
-        return DataTransform(self.hparams.resolution, self.hparams.challenge)
+        return DataTransform(self.hparams)
 
     def test_dataloader(self):
         return self._create_data_loader(self.test_data_transform(), data_partition='test', sample_rate=1.)
@@ -291,9 +304,9 @@ class NeumannMRIModel(pl.LightningModule):
         mean = mean.unsqueeze(1).unsqueeze(2)
         std = std.unsqueeze(1).unsqueeze(2)
         return {
-            'fname': fname,
-            'slice': slice,
-            'output': (output * std + mean).cpu().numpy(),
+            "fname": fname,
+            "slice": slice,
+            "output": (output * std + mean).cpu().numpy(),
         }
 
     def test_epoch_end(self, test_logs):
