@@ -11,6 +11,8 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
+
 import pytorch_lightning as pl
 import torch
 import torchvision
@@ -29,6 +31,7 @@ from data import transforms
 from data.mri_data import SliceData
 from models.neumann.neumann_model import NeumannNetwork
 from models.unet.unet_model import UnetModel
+
 
 
 def padding_tensor_kspaces(batch):
@@ -229,7 +232,13 @@ class NeumannMRIModel(pl.LightningModule):
             metrics["psnr"].append(evaluate.psnr(target, output))
         metrics = {metric: np.mean(values) for metric, values in metrics.items()}
         print(metrics, '\n')
-        self.logger.log_metrics(metrics)
+
+        # save the metrics data
+        metric_file_path = Path(self.hparams.exp_dir) / self.hparams.exp / "validation_metrics"
+        metric_file_path.mkdir(parents=True, exist_ok=True)
+        metric_file_path = metric_file_path / "metrics.csv"
+        df = pd.DataFrame([metrics])
+        df.to_csv(metric_file_path, index=False)
         return dict(log=metrics, **metrics)
 
     def _visualize(self, val_logs):
@@ -308,7 +317,7 @@ class NeumannMRIModel(pl.LightningModule):
         parser.add_argument('--num-pools', type=int, default=4, help='Number of U-Net pooling layers')
         parser.add_argument('--drop-prob', type=float, default=0.0, help='Dropout probability')
         parser.add_argument('--num-chans', type=int, default=32, help='Number of U-Net channels')
-        parser.add_argument('--n_blocks', type=int, default=6, help='Number of Neumann Network blocks')
+        parser.add_argument('--n_blocks', type=int, default=1, help='Number of Neumann Network blocks')
         parser.add_argument('--batch_size', default=16, type=int, help='Mini batch size')
         parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
         parser.add_argument('--lr-step-size', type=int, default=40,
