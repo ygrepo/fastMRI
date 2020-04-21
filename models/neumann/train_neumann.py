@@ -74,34 +74,6 @@ def default_collate(batch):
     return images, targets, kspaces, means, stds, fnames, slice_infos
 
 
-# def resize(image, target, resolution, challenge):
-#     smallest_width = min(resolution, image.shape[-2])
-#     smallest_height = min(resolution, image.shape[-3])
-#     if target is not None:
-#         smallest_width = min(smallest_width, target.shape[-1])
-#         smallest_height = min(smallest_height, target.shape[-2])
-#     crop_size = (smallest_height, smallest_width)
-#     image = transforms.complex_center_crop(image, crop_size)
-#     # Absolute value
-#     image = transforms.complex_abs(image)
-#     # Apply Root-Sum-of-Squares if multicoil data
-#     if challenge == 'multicoil':
-#         image = transforms.root_sum_of_squares(image)
-#     # Normalize input
-#     image, mean, std = transforms.normalize_instance(image, eps=1e-11)
-#     image = image.clamp(-6, 6)
-#
-#     # Normalize target
-#     if target is not None:
-#         target = transforms.to_tensor(target)
-#         target = transforms.center_crop(target, crop_size)
-#         target = transforms.normalize(target, mean, std, eps=1e-11)
-#         target = target.clamp(-6, 6)
-#     else:
-#         target = torch.Tensor([0])
-#     return image, target, mean, std
-
-
 class DataTransform:
     """
     Data Transformer for training U-Net models.
@@ -249,7 +221,10 @@ class NeumannMRIModel(pl.LightningModule):
         metric_file_path.mkdir(parents=True, exist_ok=True)
         metric_file_path = metric_file_path / "metrics.csv"
         df = pd.DataFrame([metrics])
-        df.to_csv(metric_file_path, index=False)
+        if metric_file_path.exists():
+            df.to_csv(metric_file_path, mode="a", header=False, index=False)
+        else:
+            df.to_csv(metric_file_path, mode="w", header=True, index=False)
         return dict(log=metrics, **metrics)
 
     def _visualize(self, val_logs):

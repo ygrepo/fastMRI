@@ -52,7 +52,7 @@ class ConvBlock(nn.Module):
 
     def __repr__(self):
         return f'ConvBlock(in_chans={self.in_chans}, out_chans={self.out_chans}, ' \
-            f'drop_prob={self.drop_prob})'
+               f'drop_prob={self.drop_prob})'
 
 
 class TransposeConvBlock(nn.Module):
@@ -167,9 +167,9 @@ class UnetModel(nn.Module):
             # Reflect pad on the right/botton if needed to handle odd input dimensions.
             padding = [0, 0, 0, 0]
             if output.shape[-1] != downsample_layer.shape[-1]:
-                padding[1] = 1 # Padding right
+                padding[1] = 1  # Padding right
             if output.shape[-2] != downsample_layer.shape[-2]:
-                padding[3] = 1 # Padding bottom
+                padding[3] = 1  # Padding bottom
             if sum(padding) != 0:
                 output = F.pad(output, padding, "reflect")
 

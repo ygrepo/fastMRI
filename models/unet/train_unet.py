@@ -122,10 +122,7 @@ class UnetMRIModel(MRIModel):
 
     def validation_step(self, batch, batch_idx):
         input, target, mean, std, fname, slice = batch
-        print(f"input: {input.dtype}, {input.shape}")
         output = self.forward(input)
-        print(f"output: {output.dtype}, {output.shape}")
-        print(f"{mean.shape}, {std.shape}")
         mean = mean.unsqueeze(1).unsqueeze(2)
         std = std.unsqueeze(1).unsqueeze(2)
         return {
@@ -188,7 +185,7 @@ def create_trainer(args, logger):
         checkpoint_callback=True,
         max_nb_epochs=args.num_epochs,
         gpus=args.gpus,
-        distributed_backend='ddp',
+        #distributed_backend='ddp',
         check_val_every_n_epoch=1,
         val_check_interval=1.,
         early_stop_callback=False

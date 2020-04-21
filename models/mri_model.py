@@ -6,20 +6,20 @@ LICENSE file in the root directory of this source tree.
 """
 
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytorch_lightning as pl
 import torch
 import torchvision
-from torch.utils.data import DistributedSampler, DataLoader
+from PIL import Image
+from torch.utils.data import DataLoader
+from torch.utils.data.sampler import RandomSampler
 
 from common import evaluate
 from common.utils import save_reconstructions
 from data.mri_data import SliceData
-
-import sys
-import imageio
-from pathlib import Path
 
 
 class MRIModel(pl.LightningModule):
@@ -55,13 +55,14 @@ class MRIModel(pl.LightningModule):
             sample_rate=sample_rate,
             challenge=self.hparams.challenge
         )
+        sampler = RandomSampler(dataset)
         # sampler = DistributedSampler(dataset)
         return DataLoader(
             dataset=dataset,
             batch_size=self.hparams.batch_size,
             num_workers=4,
             pin_memory=False,
-            # sampler=sampler,
+            sampler=sampler,
         )
 
     def train_data_transform(self):
@@ -103,6 +104,15 @@ class MRIModel(pl.LightningModule):
             metrics['psnr'].append(evaluate.psnr(target, output))
         metrics = {metric: np.mean(values) for metric, values in metrics.items()}
         print(metrics, '\n')
+        # save the metrics data
+        metric_file_path = Path(self.hparams.exp_dir) / self.hparams.exp / "validation_metrics"
+        metric_file_path.mkdir(parents=True, exist_ok=True)
+        metric_file_path = metric_file_path / "metrics.csv"
+        df = pd.DataFrame([metrics])
+        if metric_file_path.exists():
+            df.to_csv(metric_file_path, mode="a", header=False, index=False)
+        else:
+            df.to_csv(metric_file_path, mode="w", header=True, index=False)
         return dict(log=metrics, **metrics)
 
     def _visualize(self, val_logs):
@@ -113,10 +123,15 @@ class MRIModel(pl.LightningModule):
 
         def _save_image(image, tag):
             grid = torchvision.utils.make_grid(torch.Tensor(image), nrow=4, pad_value=1)
-            # try:
-            #     #imageio.imwrite(Path("data/save_val/" + tag), grid)
-            # except:
-            #     print("Unexpected error:", sys.exc_info()[0])
+            grid_path = Path(self.hparams.exp_dir) / self.hparams.exp / "image_validation_step"
+            grid_path.mkdir(parents=True, exist_ok=True)
+            grid_path = grid_path / tag
+            grid_np = grid.mul_(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).to('cpu', torch.uint8).numpy()
+            grid_pil = Image.fromarray(grid_np)
+            try:
+                grid_pil.save(grid_path, format="PNG")
+            except ValueError as e:
+                print(e)
 
         # Only process first size to simplify visualization.
         visualize_size = val_logs[0]['output'].shape
