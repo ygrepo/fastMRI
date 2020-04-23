@@ -235,6 +235,7 @@ class NeumannMRIModel(pl.LightningModule):
 
         def _save_image(image, tag):
             grid = torchvision.utils.make_grid(torch.Tensor(image), nrow=4, pad_value=1)
+            print(image.shape)
             grid_path = Path(self.hparams.exp_dir) / self.hparams.exp / "image_validation_step"
             grid_path.mkdir(parents=True, exist_ok=True)
             grid_path = grid_path / tag
@@ -306,7 +307,7 @@ class NeumannMRIModel(pl.LightningModule):
         parser.add_argument('--drop-prob', type=float, default=0.0, help='Dropout probability')
         parser.add_argument('--num-chans', type=int, default=32, help='Number of U-Net channels')
         parser.add_argument('--n_blocks', type=int, default=1, help='Number of Neumann Network blocks')
-        parser.add_argument('--batch_size', default=16, type=int, help='Mini batch size')
+        parser.add_argument('--batch_size', default=1, type=int, help='Mini batch size')
         parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
         parser.add_argument('--lr-step-size', type=int, default=40,
                             help='Period of learning rate decay')
