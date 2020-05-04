@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from common.subsample import create_mask_for_mask_type
 from data import transforms
-from models.neumann.operators import forward_adjoint_helper, gramian_helper
+from models.neumann.operators import forward_adjoint_helper, gramian_helper, gramian_I_helper
 
 
 class NeumannNetwork(nn.Module):

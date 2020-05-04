@@ -44,7 +44,7 @@ class SliceData(Dataset):
             num_files = round(len(files) * sample_rate)
             files = files[:num_files]
         for fname in sorted(files):
-            kspace = h5py.File(fname, 'r')['kspace']
+            kspace = h5py.File(fname, "r")['kspace']
             num_slices = kspace.shape[0]
             self.examples += [(fname, slice) for slice in range(num_slices)]
 

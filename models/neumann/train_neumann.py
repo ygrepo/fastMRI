@@ -126,7 +126,7 @@ class NeumannMRIModel(pl.LightningModule):
         self.device = "cuda"
         if hparams.gpus == 0:
             self.device = "cpu"
-        print(f"batch size:{hparams.batch_size}, number of blocks:{hparams.n_blocks}")
+        print(f"Batch size:{hparams.batch_size}, number of blocks:{hparams.n_blocks}")
         reg_model = UnetModel(
             in_chans=1,
             out_chans=1,
@@ -144,6 +144,7 @@ class NeumannMRIModel(pl.LightningModule):
             sample_rate=sample_rate,
             challenge=self.hparams.challenge
         )
+        print(f"Number of slices:{len(dataset)}")
         sampler = RandomSampler(dataset)
         # sampler = DistributedSampler(dataset)
         return DataLoader(

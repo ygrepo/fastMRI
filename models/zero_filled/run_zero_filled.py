@@ -18,7 +18,8 @@ def save_zero_filled(data_dir, out_dir, which_challenge, resolution):
     reconstructions = {}
 
     for file in data_dir.iterdir():
-        with h5py.File(file) as hf:
+        print("file:{}".format(file))
+        with h5py.File(file, "r") as hf:
             masked_kspace = transforms.to_tensor(hf['kspace'][()])
             # Inverse Fourier Transform to get zero filled solution
             image = transforms.ifft2(masked_kspace)
