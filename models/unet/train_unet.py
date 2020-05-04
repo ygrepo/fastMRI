@@ -111,6 +111,7 @@ class UnetMRIModel(MRIModel):
         )
 
     def forward(self, input):
+        print(input.unsqueeze(1).shape)
         return self.unet(input.unsqueeze(1)).squeeze(1)
 
     def training_step(self, batch, batch_idx):

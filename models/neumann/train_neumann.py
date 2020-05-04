@@ -14,11 +14,11 @@ from pathlib import Path
 # Numpy and Pandas
 import numpy as np
 import pandas as pd
-
 # PyTorch
 import pytorch_lightning as pl
 import torch
 import torchvision
+from PIL import Image
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers.test_tube import TestTubeLogger
 from torch.nn import functional as F
@@ -26,19 +26,16 @@ from torch.optim.rmsprop import RMSprop
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import RandomSampler
 
-from PIL import Image
-
 # fastMRI
 from common import evaluate
 from common.args import Args
+from common.subsample import create_mask_for_mask_type
 from common.utils import save_reconstructions
 from data import transforms
 from data.mri_data import SliceData
 from models.neumann.neumann_model import NeumannNetwork
-from models.unet.unet_model import UnetModel
 from models.neumann.operators import resize, forward_adjoint_helper
-from common.subsample import create_mask_for_mask_type
-
+from models.unet.unet_model import UnetModel
 
 
 def padding_tensor_kspaces(batch):
@@ -144,7 +141,6 @@ class NeumannMRIModel(pl.LightningModule):
             sample_rate=sample_rate,
             challenge=self.hparams.challenge
         )
-        print(f"Number of slices:{len(dataset)}")
         sampler = RandomSampler(dataset)
         # sampler = DistributedSampler(dataset)
         return DataLoader(
@@ -169,7 +165,7 @@ class NeumannMRIModel(pl.LightningModule):
         # print(f"Training step, batch_idx:{batch_idx}")
         image, target, kspace, mean, std, fname, slice = batch
         output = self.forward(kspace)
-        loss = F.mse_loss(output, target)
+        loss = F.l1_loss(output, target)
         logs = {"loss": loss.item()}
         print(f"loss:{loss}")
         return dict(loss=loss, log=logs)
@@ -195,7 +191,7 @@ class NeumannMRIModel(pl.LightningModule):
             "output": (output * std + mean).cpu().numpy(),
             "target": (target * std + mean).cpu().numpy(),
             "undersampled_img": (undersampled_img * std + mean).cpu().numpy(),
-            "val_loss": F.mse_loss(output, target),
+            "val_loss": F.l1_loss(output, target),
         }
 
     def _evaluate(self, val_logs):
