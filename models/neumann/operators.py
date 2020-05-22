@@ -5,7 +5,6 @@ import torch
 
 # fastMRI libraries
 from data import transforms
-from models.neumann.cg_batch import CG
 
 
 def apply_mask(device, mask_func, kspace, seed=None):
@@ -80,3 +79,10 @@ def gramian_helper(device, hparams, mask_func, img, target=None):
     kspace = X_operator(img)
     new_img, new_img_abs = forward_adjoint_helper(device, hparams, mask_func, kspace, target)
     return new_img, new_img_abs
+
+def X_I_operator(img):
+    return transforms.fft2(img)
+
+
+def gramian_I_helper(device, hparams, mask_func, img, target=None):
+    return img, transforms.complex_abs(img)
